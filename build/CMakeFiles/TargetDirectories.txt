@@ -1,0 +1,3 @@
+/home/zdredge/Fish School/build/CMakeFiles/fish_school.dir
+/home/zdredge/Fish School/build/CMakeFiles/edit_cache.dir
+/home/zdredge/Fish School/build/CMakeFiles/rebuild_cache.dir

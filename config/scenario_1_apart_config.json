@@ -1,0 +1,126 @@
+{
+  "scenario": {
+    "shape": [10,10],
+    "origin": [0,0],
+    "wrapped": false
+  },
+  "cells": {
+    "default": {
+      "delay": "transport",
+      "model": "FishCell",
+      "state": {
+        "presence": 0,
+        "direction": 0,
+        "orientation": 0
+      },
+      "neighborhood": [
+        {
+          "type": "von_neumann",
+          "range": 2
+        }
+      ]
+    },
+    "fish_1": {
+      "state": {
+        "presence": 5,
+        "direction": 1,
+        "orientation": 0
+      },
+      "cell_map": [
+        [1,1]
+      ]
+    },
+    "fish_2": {
+      "state": {
+        "presence": 5,
+        "direction": 2,
+        "orientation": 0
+      },
+      "cell_map": [
+        [1,5]
+      ]
+    },
+    "fish_3": {
+      "state": {
+        "presence": 5,
+        "direction": 3,
+        "orientation": 0
+      },
+      "cell_map": [
+        [1,8]
+      ]
+    },
+    "fish_4": {
+      "state": {
+        "presence": 5,
+        "direction": 4,
+        "orientation": 0
+      },
+      "cell_map": [
+        [4,3]
+      ]
+    },
+    "fish_5": {
+      "state": {
+        "presence": 5,
+        "direction": 1,
+        "orientation": 0
+      },
+      "cell_map": [
+        [4,7]
+      ]
+    },
+    "fish_6": {
+      "state": {
+        "presence": 5,
+        "direction": 3,
+        "orientation": 0
+      },
+      "cell_map": [
+        [7,1]
+      ]
+    },
+    "fish_7": {
+      "state": {
+        "presence": 5,
+        "direction": 2,
+        "orientation": 0
+      },
+      "cell_map": [
+        [7,6]
+      ]
+    }
+  },
+"viewer": [
+    {
+      "field": "presence",
+      "breaks": [-1, 0, 5],
+      "colors": [
+        [220, 220, 220], 
+        [255, 0, 0]       
+      ]
+    },
+    {
+      "field": "direction",
+      "breaks": [-1, 0, 1, 2, 3, 4],
+      "colors": [
+        [220, 220, 220],
+        [0, 255, 0],     
+        [255, 255, 0],  
+        [0, 0, 255],     
+        [255, 192, 203]  
+      ]
+    },
+    {
+      "field": "orientation",
+      "breaks": [-1, 0, 1, 2, 3, 4],
+      "colors": [
+        [220, 220, 220], 
+        [0, 255, 0],     
+        [255, 255, 0],   
+        [0, 0, 255],     
+        [255, 192, 203]  
+      ]
+    }
+  ]
+}

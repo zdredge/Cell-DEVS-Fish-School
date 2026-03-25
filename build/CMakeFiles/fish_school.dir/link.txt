@@ -1,0 +1,1 @@
+/usr/bin/c++ CMakeFiles/fish_school.dir/main/main.cpp.o -o "/home/zdredge/Fish School/bin/fish_school" 
