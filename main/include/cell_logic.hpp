@@ -2,10 +2,12 @@
 #define CELL_LOGIC_HPP
 
 #include <algorithm>
+#include <limits>
 #include <random>
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <functional>
 
 #include <cadmium/modeling/celldevs/asymm/cell.hpp>
 
@@ -13,12 +15,12 @@
 
 using namespace cadmium::celldevs;
 
-// Helper: parse "rXcY" → row, col
+// Helper: parse "(col,row)" → row, col
 inline void parseCellId(const std::string& id, int& row, int& col) {
     sscanf(id.c_str(), "(%d,%d)", &col, &row);
 }
 
-// Helper: format row, col → "rXcY"
+// Helper: format row, col → "(col,row)"
 inline std::string makeCellId(int row, int col) {
     return "(" + std::to_string(col) + "," + std::to_string(row) + ")";
 }
@@ -50,6 +52,14 @@ inline CellState computeCellLocal(
         CellState wall;
         wall.presence = -1;
         return wall;
+    };
+
+    // Vicinity of the edge from this cell to the neighbor at (dx, dy).
+    // Positive = water current assists movement in that direction; negative = opposes.
+    auto getVicinityTo = [&](int dx, int dy) -> double {
+        std::string targetId = makeCellId(myRow + dy, myCol + dx);
+        auto it = neighborhood.find(targetId);
+        return (it != neighborhood.end()) ? it->second.vicinity : 0.0;
     };
 
     auto dirToDelta = [](int dir, int& dx, int& dy) {
@@ -106,7 +116,7 @@ inline CellState computeCellLocal(
     // Cooperative (1) and selfish (2) escape override the school anchor.
     // Platoon vacating: a target cell with a fish moving the same direction
     // counts as "vacating" — enables coordinated school translation.
-    auto canMoveTo = [&](int fromX, int fromY, int toX, int toY, int dir) -> bool {
+    std::function<bool(int, int, int, int, int)> canMoveTo = [&](int fromX, int fromY, int toX, int toY, int dir) -> bool {
         CellState fish = getNeighbors(fromX, fromY);
         if (fish.presence != 5 || fish.direction != dir) return false;
         if (fish.behavior == 0 && isInSchool(fromX, fromY)) return false;
@@ -116,6 +126,13 @@ inline CellState computeCellLocal(
                         && target.direction == dir
                         && (target.behavior != 0 || !isInSchool(toX, toY));
             if (!platoon) return false;
+            // check to see if the vacating fish can actually move or not
+            int nextX = toX + (dir == (int)Direction::EAST ? 1 : dir == (int)Direction::WEST ? -1 : 0);
+            int nextY = toY + (dir == (int)Direction::SOUTH ? 1 : dir == (int)Direction::NORTH ? -1 : 0);
+            
+            if (!canMoveTo(toX, toY, nextX, nextY, dir)) {
+                return false; // The platoon is blocked up ahead. Do not move.
+            }
         }
         if (isPredatorHeadingTo(toX, toY)) return false;
 
@@ -155,18 +172,17 @@ inline CellState computeCellLocal(
             // Predator can move if target is not wall and not another predator
             if (target.presence != -1 && target.presence != 10) {
                 nextState.presence = 0;
-                nextState.orientation = state.direction;
             }
         }
     }
     // Fish departure
     else if (state.presence == 5) {
-        nextState.orientation = 0;
+        auto depart = [&]() { nextState.presence = 0; nextState.orientation = 0; };
         switch (state.direction) {
-            case (int)Direction::EAST:  if (canMoveTo(0, 0,  1,  0, state.direction)) nextState.presence = 0; break;
-            case (int)Direction::WEST:  if (canMoveTo(0, 0, -1,  0, state.direction)) nextState.presence = 0; break;
-            case (int)Direction::SOUTH: if (canMoveTo(0, 0,  0,  1, state.direction)) nextState.presence = 0; break;
-            case (int)Direction::NORTH: if (canMoveTo(0, 0,  0, -1, state.direction)) nextState.presence = 0; break;
+            case (int)Direction::EAST:  if (canMoveTo(0, 0,  1,  0, state.direction)) depart(); break;
+            case (int)Direction::WEST:  if (canMoveTo(0, 0, -1,  0, state.direction)) depart(); break;
+            case (int)Direction::SOUTH: if (canMoveTo(0, 0,  0,  1, state.direction)) depart(); break;
+            case (int)Direction::NORTH: if (canMoveTo(0, 0,  0, -1, state.direction)) depart(); break;
             default: break;
         }
     }
@@ -232,14 +248,20 @@ inline CellState computeCellLocal(
 
         int predDir = 0;
 
+        // Strong-opposing-current threshold: predator declines to enter an
+        // edge whose vicinity is <= this value (current resistance).
+        const double CURRENT_BLOCK = -0.5;
+
         if (nearestFish.empty()) {
-            // No fish — random valid allowed direction
+            // No fish — random valid allowed direction, excluding strong-opposing-current edges
             std::vector<int> validAllowed;
             for (int d : allowed) {
                 int dx, dy;
                 dirToDelta(d, dx, dy);
                 CellState t = getNeighbors(dx, dy);
-                if (t.presence != -1 && t.presence != 10) validAllowed.push_back(d);
+                if (t.presence == -1 || t.presence == 10) continue;
+                if (getVicinityTo(dx, dy) <= CURRENT_BLOCK) continue;
+                validAllowed.push_back(d);
             }
             if (!validAllowed.empty()) {
                 std::uniform_int_distribution<int> pick(0, (int)validAllowed.size() - 1);
@@ -291,17 +313,37 @@ inline CellState computeCellLocal(
                     predDir = bestDir;
                 }
 
-                // Validate target cell
+                // Validate target cell. If blocked, re-score allowed directions
+                // by distance reduction (ignoring blocked ones) — keeps predator
+                // heading toward prey instead of picking the first clear tile.
                 int tdx, tdy;
                 dirToDelta(predDir, tdx, tdy);
                 CellState targetCell = getNeighbors(tdx, tdy);
                 if (targetCell.presence == -1 || targetCell.presence == 10) {
                     predDir = 0;
+                    int bestScore = -999;
                     for (int d : allowed) {
                         int ddx, ddy;
                         dirToDelta(d, ddx, ddy);
                         CellState t = getNeighbors(ddx, ddy);
-                        if (t.presence != -1 && t.presence != 10) { predDir = d; break; }
+                        if (t.presence == -1 || t.presence == 10) continue;
+                        int newDist = abs(dCol - ddx) + abs(dRow - ddy);
+                        int score = minFishDist - newDist;
+                        if (score > bestScore) { bestScore = score; predDir = d; }
+                    }
+                }
+
+                // Current resistance: strong opposing current has a chance to stall a predator
+                // Does not fully stall them, as they should attempt to resist it rather than permanently giving up
+                if (predDir != 0) {
+                    int sdx, sdy;
+                    dirToDelta(predDir, sdx, sdy);
+                    if (getVicinityTo(sdx, sdy) <= CURRENT_BLOCK) {
+                        std::uniform_real_distribution<double> dragChance(0.0, 1.0);
+                        // 50% chance to stall when fighting strong current
+                        if (dragChance(rng) < 0.5) { 
+                        predDir = 0;
+                        }
                     }
                 }
             }
@@ -496,18 +538,49 @@ inline CellState computeCellLocal(
             // COOPERATIVE ESCAPE: consensus flee direction = oppositeDir(nearestPredDir).
             // All schooled fish compute the same fleeDir and shift together via the
             // platoon-vacating rule in canMoveTo. If the consensus direction is blocked
-            // (wall or incoming predator), fall back to schoolDir (may be 0 if anchored —
-            // acceptable; selfish escape will take over as the predator closes).
-            int fleeDir = oppositeDir(nearestPredDir);
-            int fdx, fdy;
-            dirToDelta(fleeDir, fdx, fdy);
-            bool fleeValid = fleeDir != 0
-                          && getNeighbors(fdx, fdy).presence != -1
-                          && !isPredatorHeadingTo(fdx, fdy);
-            if (fleeValid) {
-                nextState.direction = fleeDir;
+            // (wall or incoming predator), prefer a current-assisted perpendicular
+            // before falling back to schoolDir — lets the school exploit currents
+            // when pushed against a wall.
+            
+            // Reluctance: each cooperatively-escaping fish independently rolls; with
+            // probability (1 - P_FLEE) it holds station (direction=0) this tick.
+            // Lowers the school's effective flee speed below the predator's, so the
+            // gap closes and captures happen in open water rather than against a wall.
+            // Independent rolls intentionally fragment the school via the platoon
+            // bottleneck in canMoveTo — stragglers become easier targets.
+            constexpr double P_FLEE = 0.8;
+            std::uniform_real_distribution<double> reluctance(0.0, 1.0);
+            if (reluctance(rng) >= P_FLEE) {
+                nextState.direction = 0;
             } else {
-                nextState.direction = schoolDir;
+                int fleeDir = oppositeDir(nearestPredDir);
+                int fdx, fdy;
+                dirToDelta(fleeDir, fdx, fdy);
+                bool fleeValid = fleeDir != 0
+                              && getNeighbors(fdx, fdy).presence != -1
+                              && !isPredatorHeadingTo(fdx, fdy);
+                if (fleeValid) {
+                    nextState.direction = fleeDir;
+                } else {
+                    int perpA, perpB;
+                    if (fleeDir == (int)Direction::EAST || fleeDir == (int)Direction::WEST) {
+                        perpA = (int)Direction::NORTH; perpB = (int)Direction::SOUTH;
+                    } else {
+                        perpA = (int)Direction::EAST;  perpB = (int)Direction::WEST;
+                    }
+                    int bestPerp = 0;
+                    // Among the two perpendiculars, prefer the one with better vicinity (current-assisted)
+                    double bestVic = -std::numeric_limits<double>::infinity();
+                    for (int p : {perpA, perpB}) {
+                        int pdx, pdy;
+                        dirToDelta(p, pdx, pdy);
+                        if (getNeighbors(pdx, pdy).presence == -1) continue;
+                        if (isPredatorHeadingTo(pdx, pdy)) continue;
+                        double v = getVicinityTo(pdx, pdy);
+                        if (v > bestVic) { bestVic = v; bestPerp = p; }
+                    }
+                    nextState.direction = bestPerp != 0 ? bestPerp : schoolDir;
+                }
             }
         }
         else {
@@ -515,57 +588,83 @@ inline CellState computeCellLocal(
             // direction (its orientation), overriding school anchor. If
             // the predator has no orientation yet, fall back to the approach
             // axis (direction FROM fish to predator).
-            int swerveAxis = nearestPredOrientation != 0 ? nearestPredOrientation
-                                                         : nearestPredDir;
-            int perpA, perpB;
-            if (swerveAxis == (int)Direction::EAST || swerveAxis == (int)Direction::WEST) {
-                perpA = (int)Direction::NORTH;
-                perpB = (int)Direction::SOUTH;
-            } else {
-                perpA = (int)Direction::EAST;
-                perpB = (int)Direction::WEST;
-            }
-            int adx, ady, bdx, bdy;
-            dirToDelta(perpA, adx, ady);
-            dirToDelta(perpB, bdx, bdy);
-            bool validA = getNeighbors(adx, ady).presence != -1 && !isPredatorHeadingTo(adx, ady);
-            bool validB = getNeighbors(bdx, bdy).presence != -1 && !isPredatorHeadingTo(bdx, bdy);
 
-            if (validA && validB) {
-                std::uniform_int_distribution<int> coin(0, 1);
-                nextState.direction = coin(rng) == 0 ? perpA : perpB;
-            } else if (validA) {
-                nextState.direction = perpA;
-            } else if (validB) {
-                nextState.direction = perpB;
+            // "Predator Lunge" simulation: 30% chance the fish panics and
+            // hesitates when a predator is this close, letting the predator
+            // close the gap and strike in open water.
+            std::uniform_real_distribution<double> panic(0.0, 1.0);
+            if (panic(rng) < 0.30) {
+                nextState.direction = 0;
             } else {
-                // Both perpendiculars blocked — try direct flee, then any escape
-                int fleeDir = oppositeDir(nearestPredDir);
-                int fdx, fdy;
-                dirToDelta(fleeDir, fdx, fdy);
-                if (fleeDir != 0 && getNeighbors(fdx, fdy).presence != -1
-                    && !isPredatorHeadingTo(fdx, fdy)) {
-                    nextState.direction = fleeDir;
+                int swerveAxis = nearestPredOrientation != 0 ? nearestPredOrientation
+                                                             : nearestPredDir;
+                int perpA, perpB;
+                if (swerveAxis == (int)Direction::EAST || swerveAxis == (int)Direction::WEST) {
+                    perpA = (int)Direction::NORTH;
+                    perpB = (int)Direction::SOUTH;
                 } else {
-                    std::vector<int> validDirs;
-                    for (int d = 1; d <= 4; d++) {
-                        int ddx, ddy;
-                        dirToDelta(d, ddx, ddy);
-                        if (getNeighbors(ddx, ddy).presence != -1 && !isPredatorHeadingTo(ddx, ddy)) {
-                            validDirs.push_back(d);
-                        }
-                    }
-                    if (!validDirs.empty()) {
-                        std::uniform_int_distribution<int> pick(0, (int)validDirs.size() - 1);
-                        nextState.direction = validDirs[pick(rng)];
+                    perpA = (int)Direction::EAST;
+                    perpB = (int)Direction::WEST;
+                }
+
+                int adx, ady, bdx, bdy;
+                dirToDelta(perpA, adx, ady);
+                dirToDelta(perpB, bdx, bdy);
+                bool validA = getNeighbors(adx, ady).presence != -1 && !isPredatorHeadingTo(adx, ady);
+                bool validB = getNeighbors(bdx, bdy).presence != -1 && !isPredatorHeadingTo(bdx, bdy);
+
+                if (validA && validB) {
+                    // Prefer the current-assisted perpendicular 80% of the time;
+                    // 20% ignore the current (random coin flip) to avoid the fish
+                    // becoming perfectly predictable in strong-current zones.
+                    double vA = getVicinityTo(adx, ady);
+                    double vB = getVicinityTo(bdx, bdy);
+                    std::uniform_real_distribution<double> prob(0.0, 1.0);
+                    if (vA > vB && prob(rng) < 0.8) {
+                        nextState.direction = perpA;
+                    } else if (vB > vA && prob(rng) < 0.8) {
+                        nextState.direction = perpB;
                     } else {
-                        nextState.direction = 0;
+                        std::uniform_int_distribution<int> coin(0, 1);
+                        nextState.direction = coin(rng) == 0 ? perpA : perpB;
+                    }
+                } else if (validA) {
+                    nextState.direction = perpA;
+                } else if (validB) {
+                    nextState.direction = perpB;
+                } else {
+                    // Both perpendiculars blocked — try direct flee, then any escape
+                    int fleeDir = oppositeDir(nearestPredDir);
+                    int fdx, fdy;
+                    dirToDelta(fleeDir, fdx, fdy);
+                    if (fleeDir != 0 && getNeighbors(fdx, fdy).presence != -1
+                        && !isPredatorHeadingTo(fdx, fdy)) {
+                        nextState.direction = fleeDir;
+                    } else {
+                        // Last-ditch: pick valid direction with the best vicinity
+                        // (current-assisted), random among ties.
+                        std::vector<int> bestDirs;
+                        double bestVic = -std::numeric_limits<double>::infinity();
+                        for (int d = 1; d <= 4; d++) {
+                            int ddx, ddy;
+                            dirToDelta(d, ddx, ddy);
+                            if (getNeighbors(ddx, ddy).presence == -1) continue;
+                            if (isPredatorHeadingTo(ddx, ddy)) continue;
+                            double v = getVicinityTo(ddx, ddy);
+                            if (v > bestVic) { bestVic = v; bestDirs = {d}; }
+                            else if (v == bestVic) { bestDirs.push_back(d); }
+                        }
+                        if (!bestDirs.empty()) {
+                            std::uniform_int_distribution<int> pick(0, (int)bestDirs.size() - 1);
+                            nextState.direction = bestDirs[pick(rng)];
+                        } else {
+                            nextState.direction = 0;
+                        }
                     }
                 }
             }
         }
-    }
-    else {
+    } else {
         // Empty cell — clear all transient fields
         nextState.direction = 0;
         nextState.orientation = 0;
