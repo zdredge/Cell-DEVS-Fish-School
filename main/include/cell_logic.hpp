@@ -272,7 +272,7 @@ inline CellState computeCellLocal(
             // linearly with visible fish count, capped so the predator always
             // has at least (1 - CAP) chance to act (no permanent paralysis).
             const double CONFUSION_PER_FISH = 0.06;
-            const double CONFUSION_CAP      = 0.35;
+            const double CONFUSION_CAP      = 0.36;
             double confProb = std::min(CONFUSION_CAP,
                                        CONFUSION_PER_FISH * visibleFishCount);
             std::uniform_real_distribution<double> prob(0.0, 1.0);
