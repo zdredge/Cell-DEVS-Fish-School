@@ -1,0 +1,14 @@
+# Build artifacts
+build/
+bin/
+
+# Python
+__pycache__/
+*.pyc
+
+# Simulation output
+*.csv
+
+# OS files
+.DS_Store
+Thumbs.db
